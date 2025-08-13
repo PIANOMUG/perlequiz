@@ -1,0 +1,1244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Perle AI Quiz</title>
+  <!-- Tailwind CSS via CDN for styling -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Firebase JS SDKs -->
+  <script type="module">
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+    import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+    import { getFirestore, doc, setDoc, updateDoc, onSnapshot, collection, increment, getDoc, addDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+    // This section contains all the application logic.
+    // It is self-contained and manages the entire UI and state.
+
+    // Global variables from the Canvas environment. Do not modify.
+    const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+    const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+    const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+    
+    // Global variables for Firebase instances
+    let app, auth, db;
+    let unsubscribeLeaderboard, unsubscribeAnalytics;
+
+    // Application state variables
+    let quizState = 'start'; // 'start', 'playing', 'results', 'feedback', 'leaderboard'
+    let questions = [];
+    let currentQuestionIndex = 0;
+    let score = 0;
+    let timeLeft = 15;
+    let showFeedback = false;
+    let isCorrect = null;
+    let selectedOption = null;
+    let userScore = null;
+    let showConfetti = false;
+    let adminAnalytics = { totalPlays: 0, totalScore: 0 };
+    let leaderboardData = [];
+    let isAuthReady = false;
+    let totalTime = 0;
+    let timerInterval;
+    let username = 'Anonymous';
+    let userId = null;
+    let showUsernameModal = false;
+    let theme = 'light';
+
+    // The image path for the logo.
+    const perleLogo = 'https://raw.githubusercontent.com/PIANOMUG/perlequiz/main/perlelogo.jpg';
+
+    // The expanded list of 50 questions for the quiz.
+    const allQuestions = [
+      {
+        question: "What was Perle's original company name before rebranding?",
+        options: ["Alpha AI", "KIVA AI", "Genesis Labs", "DataFlow Inc."],
+        answer: "KIVA AI",
+        explanation: "Perle rebranded from its original name, KIVA AI, in February 2025."
+      },
+      {
+        question: "How much total funding has Perle AI raised?",
+        options: ["$7M", "$8.5M", "$9M", "$17.5M"],
+        answer: "$17.5M",
+        explanation: "Perle has raised a total of $17.5M across two seed rounds."
+      },
+      {
+        question: "Who is the founder and CEO of Perle?",
+        options: ["Sajjad Abdoli", "Rima Al Shikh", "Ahmed Rashad", "Jeremy Wano"],
+        answer: "Ahmed Rashad",
+        explanation: "Ahmed Rashad is the founder and CEO of Perle."
+      },
+      {
+        question: "In what city is Perle AI headquartered?",
+        options: ["New York, NY", "San Francisco, CA", "Austin, TX", "London, UK"],
+        answer: "San Francisco, CA",
+        explanation: "Perle is headquartered in San Francisco, California."
+      },
+      {
+        question: "The new funding for Perle will be used to launch which new product?",
+        options: ["Perle Labs", "Perle Connect", "AI Vault", "Data Stream"],
+        answer: "Perle Labs",
+        explanation: "The new funding will be used to launch Perle Labs, a crypto-native ecosystem."
+      },
+      {
+        question: "What is the primary mission of Perle?",
+        options: [
+          "Building social media platforms",
+          "Delivering high-accuracy AI training data",
+          "Developing gaming software",
+          "Creating financial trading algorithms"
+        ],
+        answer: "Delivering high-accuracy AI training data",
+        explanation: "Perle's mission is to provide high-quality training and evaluation data for AI teams."
+      },
+      {
+        question: "From which industry did Perle's founder, Ahmed Rashad, come from before starting Perle?",
+        options: ["Finance", "Oil rigs", "Education", "Marketing"],
+        answer: "Oil rigs",
+        explanation: "Ahmed Rashad's profile mentions his experience from oil rigs to MIT and Scale AI."
+      },
+      {
+        question: "What is a key feature of the Perle Labs platform?",
+        options: [
+          "It is a social networking site",
+          "It is a crypto-native ecosystem",
+          "It is an e-commerce platform",
+          "It is a video streaming service"
+        ],
+        answer: "It is a crypto-native ecosystem",
+        explanation: "Perle Labs is described as a crypto-native ecosystem designed to transform how human input powers AI."
+      },
+      {
+        question: "Which of the following is NOT a core value of Perle mentioned in their company profile?",
+        options: [
+          "We are owners",
+          "We never split the difference",
+          "We are specific",
+          "We are always first"
+        ],
+        answer: "We are always first",
+        explanation: "The company values mentioned are 'We are owners', 'We never split the difference', and 'We are specific'."
+      },
+      {
+        question: "What does the name 'Perle' refer to?",
+        options: [
+          "A type of gem",
+          "A Latin word for 'wisdom'",
+          "'Pearls of Wisdom'",
+          "The founder's last name"
+        ],
+        answer: "'Pearls of Wisdom'",
+        explanation: "The name 'Perle' is taken from the expression 'Pearls of Wisdom'."
+      },
+      {
+        question: "Perle's $9M seed round in August 2025 was led by which firm?",
+        options: ["CoinFund", "Protagonist", "Framework Ventures", "HashKey"],
+        answer: "Framework Ventures",
+        explanation: "Framework Ventures led the most recent $9M seed round."
+      },
+      {
+        question: "What percentage of their time and resources do many AI teams spend on data management, according to Perle?",
+        options: ["20%", "40%", "60%", "Up to 80%"],
+        answer: "Up to 80%",
+        explanation: "According to Perle, teams can spend up to 80% of their resources on data management."
+      },
+      {
+        question: "The Perle platform supports which type of data?",
+        options: [
+          "Only text data",
+          "Multimodal data (audio, image, video)",
+          "Financial data only",
+          "Social media posts only"
+        ],
+        answer: "Multimodal data (audio, image, video)",
+        explanation: "The platform supports multimodal data like audio, image, and video."
+      },
+      {
+        question: "In which year was Perle originally founded?",
+        options: ["2022", "2023", "2024", "2025"],
+        answer: "2024",
+        explanation: "The company was founded as KIVA AI in March 2024."
+      },
+      {
+        question: "Which of these is a top competitor of Perle mentioned in the search results?",
+        options: ["Google", "Amazon", "Tech Mahindra", "Microsoft"],
+        answer: "Tech Mahindra",
+        explanation: "Tech Mahindra, EXL, and Quantiphi are listed as top competitors."
+      },
+      {
+        question: "What is the primary method Perle uses to ensure high-quality data?",
+        options: [
+          "AI-only automation",
+          "Low-skill gig workers",
+          "An expert-in-the-loop system",
+          "Crowdsourcing without vetting"
+        ],
+        answer: "An expert-in-the-loop system",
+        explanation: "Perle replaces generic vendors with 'expert-in-the-loop' pipelines."
+      },
+      {
+        question: "The Perle team is made up of veterans from which companies/institutions?",
+        options: [
+          "Google, Apple, Facebook",
+          "Scale AI, Meta, MIT, Berkeley",
+          "Netflix, Spotify, Hulu",
+          "Tesla, SpaceX, OpenAI"
+        ],
+        answer: "Scale AI, Meta, MIT, Berkeley",
+        explanation: "The founding team has experience from Scale AI, Meta, MIT, and Berkeley."
+      },
+      {
+        question: "Which type of learning is central to Perle's methodology?",
+        options: [
+          "Unsupervised learning",
+          "Reinforcement Learning from Human Feedback (RLHF)",
+          "Semi-supervised learning",
+          "Federated learning"
+        ],
+        answer: "Reinforcement Learning from Human Feedback (RLHF)",
+        explanation: "Reinforcement Learning from Human Feedback (RLHF) is a central part of Perle's approach."
+      },
+      {
+        question: "What does Perle Labs use to provide transparent payments and verifiable work histories?",
+        options: [
+          "PayPal",
+          "Bank transfers",
+          "Blockchain infrastructure and incentive design",
+          "Cash payments"
+        ],
+        answer: "Blockchain infrastructure and incentive design",
+        explanation: "Perle Labs leverages blockchain infrastructure and incentive design for transparency."
+      },
+      {
+        question: "Who led the pre-seed funding round for Perle in October 2024?",
+        options: ["Framework Ventures", "CoinFund", "Protagonist", "HashKey"],
+        answer: "CoinFund",
+        explanation: "CoinFund led the earlier $8.5M pre-seed round."
+      },
+      {
+        question: "What is the name of the AI model development ecosystem launched by Perle?",
+        options: ["AI Core", "Perle Labs", "AI Nexus", "Data Stream"],
+        answer: "Perle Labs",
+        explanation: "Perle Labs is the crypto-native ecosystem designed to transform human input for AI models."
+      },
+      {
+        question: "What is Perle's approach to data annotation?",
+        options: [
+          "Using only AI to annotate data",
+          "Crowdsourcing to a large, unvetted group",
+          "Using an expert-in-the-loop pipeline",
+          "Automated annotation without human oversight"
+        ],
+        answer: "Using an expert-in-the-loop pipeline",
+        explanation: "Perle's methodology focuses on high-quality, expert-driven data annotation."
+      },
+      {
+        question: "What is the total number of investors in Perle's two seed rounds?",
+        options: ["10", "12", "15", "More than 20"],
+        answer: "More than 20",
+        explanation: "The two funding rounds attracted more than 20 investors combined."
+      },
+      {
+        question: "What does the 'We are owners' core value at Perle signify?",
+        options: [
+          "That employees own company shares",
+          "A sense of personal responsibility and accountability",
+          "That the company is privately owned",
+          "That they own their data"
+        ],
+        answer: "A sense of personal responsibility and accountability",
+        explanation: "The value emphasizes taking full ownership and accountability for one's work."
+      },
+      {
+        question: "What is the approximate size of Perle's team?",
+        options: ["Less than 10", "11-50", "51-200", "More than 200"],
+        answer: "11-50",
+        explanation: "Company profiles suggest a team size in the range of 11-50 employees."
+      },
+      {
+        question: "Which of the following is an example of 'multimodal data' supported by Perle?",
+        options: ["Only text files", "Just images", "Audio, video, and text", "Spreadsheets only"],
+        answer: "Audio, video, and text",
+        explanation: "Multimodal data includes various types of media, such as audio, video, and text."
+      },
+      {
+        question: "How long has Perle been operating as a company as of August 2025?",
+        options: ["Less than a year", "About a year and a half", "Two years", "More than three years"],
+        answer: "About a year and a half",
+        explanation: "Founded in March 2024, the company is about a year and a half old as of August 2025."
+      },
+      {
+        question: "What type of customers does Perle primarily target?",
+        options: [
+          "Small businesses",
+          "Individual developers",
+          "AI and machine learning teams",
+          "Large e-commerce companies"
+        ],
+        answer: "AI and machine learning teams",
+        explanation: "Perle focuses on providing solutions for teams building and training AI models."
+      },
+      {
+        question: "What is the key differentiator of Perle's data solution?",
+        options: [
+          "It is the cheapest option on the market",
+          "It is the fastest for data delivery",
+          "It provides high-quality data from vetted experts, not low-skill workers",
+          "It offers unlimited data storage"
+        ],
+        answer: "It provides high-quality data from vetted experts, not low-skill workers",
+        explanation: "Perle distinguishes itself by using an 'expert-in-the-loop' system for superior data quality."
+      },
+      {
+        question: "The rebranding from KIVA AI to Perle was motivated by what?",
+        options: [
+          "A change in company ownership",
+          "A focus on a new market",
+          "To reflect a new strategy and mission",
+          "A legal dispute over the name"
+        ],
+        answer: "To reflect a new strategy and mission",
+        explanation: "The rebranding aimed to align the company's identity with its evolving strategy and mission."
+      },
+      {
+        question: "What is a benefit of using blockchain in Perle Labs?",
+        options: [
+          "Faster model training",
+          "Increased storage capacity",
+          "Transparent payments and verifiable work histories",
+          "Reduced energy consumption"
+        ],
+        answer: "Transparent payments and verifiable work histories",
+        explanation: "The blockchain infrastructure is used to ensure transparency and trust in the system."
+      },
+      {
+        question: "Which of the following describes Perle's business model?",
+        options: [
+          "Subscription-based for software",
+          "Selling physical products",
+          "A platform for high-quality data and human input",
+          "An ad-supported social network"
+        ],
+        answer: "A platform for high-quality data and human input",
+        explanation: "Perle's core business is providing a platform that connects human expertise with AI development."
+      },
+      {
+        question: "Who is the lead investor in Perle's second seed round of $9M?",
+        options: ["Framework Ventures", "CoinFund", "Protagonist", "HashKey"],
+        answer: "Framework Ventures",
+        explanation: "Framework Ventures led the most recent $9M round in August 2025."
+      },
+      {
+        question: "What is the primary goal of Reinforcement Learning from Human Feedback (RLHF)?",
+        options: [
+          "To train models without any human interaction",
+          "To align AI models with human values and intentions",
+          "To automatically generate training data",
+          "To speed up the training process by 10x"
+        ],
+        answer: "To align AI models with human values and intentions",
+        explanation: "RLHF is a method to guide AI models to perform tasks that are better aligned with human preferences."
+      },
+      {
+        question: "Perle is aiming to be a 'crypto-native' company. What does this mean?",
+        options: [
+          "They only accept crypto payments",
+          "Their core business is trading cryptocurrencies",
+          "They are built on blockchain technology and crypto-native principles",
+          "They only hire people from the crypto industry"
+        ],
+        answer: "They are built on blockchain technology and crypto-native principles",
+        explanation: "Being 'crypto-native' means the company's foundation and processes are built around blockchain technology."
+      },
+      {
+        question: "What is the total funding amount from the pre-seed round led by CoinFund?",
+        options: ["$7M", "$8.5M", "$9M", "$17.5M"],
+        answer: "$8.5M",
+        explanation: "The pre-seed funding round in October 2024 amounted to $8.5M."
+      },
+      {
+        question: "What does the core value 'We never split the difference' imply?",
+        options: [
+          "Avoiding compromises in negotiations",
+          "Always choosing one path over another",
+          "Commitment to finding the best solution, not just an easy one",
+          "Dividing work evenly among the team"
+        ],
+        answer: "Commitment to finding the best solution, not just an easy one",
+        explanation: "This value emphasizes a dedication to excellence and not settling for halfway solutions."
+      },
+      {
+        question: "The name 'Perle' is a nod to what?",
+        options: [
+          "A famous tech leader",
+          "A type of rare pearl",
+          "The phrase 'Pearls of Wisdom'",
+          "An ancient language"
+        ],
+        answer: "The phrase 'Pearls of Wisdom'",
+        explanation: "The name is a tribute to the human knowledge and wisdom that powers AI."
+      },
+      {
+        question: "What problem does Perle aim to solve for AI teams?",
+        options: [
+          "Lack of skilled developers",
+          "Inefficient data management and poor data quality",
+          "High costs of cloud computing",
+          "Slow internet speeds"
+        ],
+        answer: "Inefficient data management and poor data quality",
+        explanation: "Perle's mission is to provide better data solutions to solve these common AI development problems."
+      },
+      {
+        question: "What is the role of the 'expert-in-the-loop' system?",
+        options: [
+          "To provide continuous, low-quality data",
+          "To automate the entire data pipeline without human involvement",
+          "To ensure high-quality data through expert human review",
+          "To train models without any data"
+        ],
+        answer: "To ensure high-quality data through expert human review",
+        explanation: "Experts are integrated into the data pipeline to maintain a high standard of quality."
+      },
+      {
+        question: "Where can users find transparent payment information on Perle Labs?",
+        options: [
+          "In their email inbox",
+          "On a public ledger using blockchain",
+          "In a private database",
+          "By contacting customer support"
+        ],
+        answer: "On a public ledger using blockchain",
+        explanation: "Blockchain infrastructure provides a transparent and verifiable record of payments and work history."
+      },
+      {
+        question: "Which of the following is a key reason for Perle's rapid growth?",
+        options: [
+          "Viral marketing campaigns",
+          "Focus on low-cost solutions",
+          "Addressing the critical need for high-quality data in AI",
+          "Partnering with a single large corporation"
+        ],
+        answer: "Addressing the critical need for high-quality data in AI",
+        explanation: "The demand for high-quality data is a major driver of Perle's success."
+      },
+      {
+        question: "What kind of data workers does Perle Labs attract?",
+        options: [
+          "Anyone who wants to participate",
+          "Only software engineers",
+          "High-skilled experts and professionals",
+          "Low-skilled gig workers"
+        ],
+        answer: "High-skilled experts and professionals",
+        explanation: "The platform is designed to attract experts to provide high-quality input."
+      },
+      {
+        question: "Perle's business is centered around the idea that human input is essential for what?",
+        options: [
+          "Website design",
+          "High-accuracy AI training data",
+          "Financial market predictions",
+          "Social media content"
+        ],
+        answer: "High-accuracy AI training data",
+        explanation: "Perle's entire model is built on the belief that human input is crucial for developing accurate AI."
+      },
+      {
+        question: "The company's values are described as 'relentless' and 'specific'. What is the third value?",
+        options: [
+          "We are owners",
+          "We are flexible",
+          "We are adaptable",
+          "We are global"
+        ],
+        answer: "We are owners",
+        explanation: "'We are owners' is one of the three core values of the company."
+      },
+      {
+        question: "What is one of the primary goals of the Perle Labs platform?",
+        options: [
+          "To sell data to the public",
+          "To automate all data tasks",
+          "To provide a new way for human input to power AI models",
+          "To create a social network for AI enthusiasts"
+        ],
+        answer: "To provide a new way for human input to power AI models",
+        explanation: "Perle Labs is a crypto-native ecosystem for human input on AI models."
+      },
+      {
+        question: "Perle's founder studied at which prestigious university?",
+        options: ["Stanford University", "MIT", "Harvard University", "Caltech"],
+        answer: "MIT",
+        explanation: "Ahmed Rashad's profile mentions he is a graduate of MIT."
+      },
+      {
+        question: "What kind of AI is Perle's data primarily used for?",
+        options: [
+          "Generative AI and large language models",
+          "Basic chatbots",
+          "Image filters",
+          "Simple recommendation engines"
+        ],
+        answer: "Generative AI and large language models",
+        explanation: "The demand for high-quality data is particularly high for training advanced models like LLMs."
+      },
+      {
+        question: "In what month and year was the rebranding to Perle announced?",
+        options: ["March 2024", "October 2024", "February 2025", "August 2025"],
+        answer: "February 2025",
+        explanation: "The company rebranded from KIVA AI to Perle in February 2025."
+      },
+      {
+        question: "What is one of the key benefits for a worker on the Perle Labs platform?",
+        options: [
+          "Guaranteed weekly salary",
+          "Transparent and verifiable work history on a public ledger",
+          "Free access to company stock",
+          "Discounts on company products"
+        ],
+        answer: "Transparent and verifiable work history on a public ledger",
+        explanation: "The blockchain infrastructure allows for a permanent record of contributions."
+      },
+      {
+        question: "What does the term 'multimodal' mean in the context of Perle's data?",
+        options: [
+          "Multiple languages",
+          "Multiple types of data, such as text, images, and audio",
+          "Data from multiple countries",
+          "Data with multiple labels"
+        ],
+        answer: "Multiple types of data, such as text, images, and audio",
+        explanation: "Multimodal data refers to the use of different types of media in the same dataset."
+      },
+      {
+        question: "What is the primary purpose of Perle's new funding?",
+        options: [
+          "To hire a new CEO",
+          "To expand into the gaming industry",
+          "To launch Perle Labs and grow the team",
+          "To open new physical offices"
+        ],
+        answer: "To launch Perle Labs and grow the team",
+        explanation: "The new funding is specifically earmarked for launching Perle Labs and expanding the team."
+      },
+      {
+        question: "Who is the lead investor in Perle's $8.5M pre-seed round?",
+        options: ["Framework Ventures", "CoinFund", "Protagonist", "HashKey"],
+        answer: "CoinFund",
+        explanation: "CoinFund was the lead investor for the pre-seed round."
+      },
+      {
+        question: "What is the core idea behind the name 'Perle'?",
+        options: [
+          "The founder's last name",
+          "A type of rare gemstone",
+          "A symbol of human wisdom and knowledge",
+          "A tribute to a city in Europe"
+        ],
+        answer: "A symbol of human wisdom and knowledge",
+        explanation: "The name comes from 'Pearls of Wisdom,' representing the value of human expertise."
+      }
+    ];
+
+    // SVG Icons
+    const ICONS = {
+      user: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-user"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>`,
+      brain: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-brain"><path d="M9 18a6 6 0 0 1-5.5-5.5a5.5 5.5 0 0 1 5.5-5.5v11ZM21 14a5.5 5.5 0 0 1-5.5 5.5A5.5 5.5 0 0 1 10 14h11ZM11 6a5.5 5.5 0 0 1 5.5-5.5A5.5 5.5 0 0 1 21 6h-10Z"/></svg>`,
+      trophy: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-trophy"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14v-2"/><path d="M14 14v-2"/><path d="M8 14V6"/><path d="M16 14V6"/><circle cx="12" cy="17" r="5"/></svg>`,
+      messageCircle: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-message-circle"><path d="M7.9 20A9.3 9.3 0 0 1 4 16H3a12 12 0 0 0 18 0h-1a9.3 9.3 0 0 1-4 4c-.7 0-1.4-.1-2.1-.4a8.6 8.6 0 0 1-4.9.4ZM12 10a2 2 0 1 0 0-4a2 2 0 0 0 0 4Z"/><path d="M10 12a2 2 0 1 0 0-4a2 2 0 0 0 0 4Z"/><path d="M14 12a2 2 0 1 0 0-4a2 2 0 0 0 0 4Z"/></svg>`,
+      sun: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-sun"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>`,
+      moon: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-moon"><path d="M12 2a9.5 9.5 0 0 1 10 9.5c0 6.5-5.5 10.5-10.5 10.5h-.5a10 10 0 0 1-10-10c0-6 4-10 10-10z"/></svg>`,
+      zap: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-zap"><path d="M13 2L3 14h9l-1 8L21 10h-9l1-8z"/></svg>`,
+      clock: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-clock"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>`,
+      trendingUp: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-trending-up"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17"/><polyline points="16 7 22 7 22 13"/></svg>`,
+      lightbulb: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-lightbulb"><path d="M15 14c.2-1 .7-1.7 1.5-2.5 1-.9 1.5-2.2 1.5-3.5A6 6 0 0 0 6 5c0 1.3.5 2.6 1.5 3.5.8.7 1.3 1.5 1.5 2.5"/><path d="M9 18.5a.5.5 0 0 1 .5-.5h5a.5.5 0 0 1 0 1H9a.5.5 0 0 1-.5-.5Z"/><path d="M12 22a4 4 0 0 0 4-4H8a4 4 0 0 0 4 4Z"/><path d="M22 5L12 5"/><path d="M12 5L2 5"/></svg>`,
+      edit: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-edit"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`,
+      x: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-x"><path d="M18 6L6 18"/><path d="M6 6l12 12"/></svg>`,
+      twitter: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-twitter"><path d="M22 4s-.7 2.1-2 3.4c-.6.3-1.2.6-2 1c1 2 1 4 0 5s-2 3-4 3c-1 0-2 0-3-1l-3 1c-1 0-2 0-3-1s-2-2-2-4c0-2 1-3 2-4c-1-1-1-2-1-3h-1c-1-1-1-2-1-3l2-1h1c1 0 1 0 1 1l-1 2h1l-1 1s1-1 2-1c.5 0 1 .5 1.5.5s1 1 1 2c0 1-1 2-2 3l-1 1s2-1 3-1c.5 0 1 .5 1.5.5s1 1 1 2c0 1 1 2 2 2.5a4 4 0 0 0 2 0l-1-2-2-1h1l1-1v1c.5 1 1 1 1.5 1s1 .5 1.5.5c1 0 2 0 3-1s1.5-2 1.5-3c0-1-1-2-2-2.5l-1-1z"/></svg>`,
+      github: `<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" stroke="none" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-github"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3.3-4 5.5-7.5 5.5-10a5.5 5.5 0 0 0-1.5-3.5C18 2.5 16.5 2.5 15.5 3c-1.2.5-2 1.5-2.5 3c-.5 1.5-1 2-2.5 3-1.5 1-2 1.5-2.5 3.5c-.5 1-1 2-2.5 3.5C7 18 5 18.5 5 18.5a.5.5 0 0 0-.5.5v2a.5.5 0 0 0 .5.5h2.5c.5 0 .5-.5.5-1.5 0-.5.5-.5.5-.5.5-.5 1-.5 1.5-.5h.5c.5 0 1 .5 1.5.5.5 0 1 0 1.5.5.5 0 .5.5 1 1.5 0 1.5 0 1.5.5 1.5h2.5c.5 0 .5-.5.5-.5V22h-1c-.5 0-.5-.5-.5-.5z"/></svg>`
+    };
+
+    // Helper function to shuffle an array
+    const shuffleArray = (array) => {
+      const newArray = [...array];
+      for (let i = newArray.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [newArray[i], newArray[j]] = [newArray[j], newArray[i]];
+      }
+      return newArray;
+    };
+    
+    // Helper function to get a user's role based on their score.
+    const getRole = (score) => {
+      if (score === 10) return "Perle Director 🏆";
+      if (score >= 7) return "Perle Manager 🌟";
+      if (score >= 4) return "Perle Associate 👍";
+      return "Perle Intern 🐣";
+    };
+
+    // Main render function to update the entire UI based on the current state.
+    const render = () => {
+      document.body.className = `min-h-screen font-sans ${theme === 'dark' ? 'bg-gray-950 text-gray-50' : 'bg-gray-50 text-gray-800'}`;
+      const appContainer = document.getElementById('app-container');
+      const modalContainer = document.getElementById('modal-container');
+      const headerContainer = document.getElementById('header-container');
+
+      // Render the header
+      const desktopNavClass = (pageState) => {
+        const baseClass = "text-gray-600 dark:text-gray-300 font-semibold transition-colors flex items-center space-x-2";
+        const activeClass = "text-orange-600 dark:text-orange-400 border-b-2 border-orange-600 pb-1";
+        const inactiveClass = "hover:text-orange-600";
+        const currentActiveState = ['start', 'playing', 'results'].includes(quizState) ? 'start' : quizState;
+        return `${baseClass} ${currentActiveState === pageState ? activeClass : inactiveClass}`;
+      };
+
+      const navButtonClass = (pageState) => {
+        const baseClass = "p-2 rounded-full text-gray-500 dark:text-gray-400 transition-colors";
+        const activeClass = "bg-gray-200 dark:bg-gray-700 text-orange-600 dark:text-orange-500 hover:bg-gray-300 dark:hover:bg-gray-600";
+        const inactiveClass = "hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-orange-600";
+        const currentActiveState = ['start', 'playing', 'results'].includes(quizState) ? 'start' : quizState;
+        return `${baseClass} ${currentActiveState === pageState ? activeClass : inactiveClass}`;
+      };
+
+      headerContainer.innerHTML = `
+        <header class="w-full bg-white dark:bg-gray-900 shadow-md z-20 sticky top-0">
+          <div class="container mx-auto px-4 py-4 flex items-center justify-between">
+            <div class="flex items-center space-x-3">
+              <img src="${perleLogo}" alt="Perle Logo" class="w-8 h-8 object-contain" />
+              <h1 class="text-2xl font-extrabold text-gray-900 dark:text-gray-50">Perle Quiz</h1>
+            </div>
+            
+            <nav class="flex md:hidden items-center space-x-4">
+              <button onclick="setQuizState('start')" class="${navButtonClass('start')}">
+                ${ICONS.brain}
+              </button>
+              <button onclick="setQuizState('leaderboard')" class="${navButtonClass('leaderboard')}">
+                ${ICONS.trophy}
+              </button>
+              <button onclick="setQuizState('feedback')" class="${navButtonClass('feedback')}">
+                ${ICONS.messageCircle}
+              </button>
+            </nav>
+
+            <nav class="hidden md:flex items-center space-x-6">
+              <button onclick="setQuizState('start')" class="${desktopNavClass('start')}">
+                ${ICONS.brain}
+                <span>Home</span>
+              </button>
+              <button onclick="setQuizState('leaderboard')" class="${desktopNavClass('leaderboard')}">
+                ${ICONS.trophy}
+                <span>Leaderboard</span>
+              </button>
+              <button onclick="setQuizState('feedback')" class="${desktopNavClass('feedback')}">
+                ${ICONS.messageCircle}
+                <span>Feedback</span>
+              </button>
+            </nav>
+            
+            <div class="flex items-center space-x-4">
+              <button id="theme-toggle-btn" class="p-2 rounded-full text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
+                ${theme === 'light' ? ICONS.moon : ICONS.sun}
+              </button>
+              <div
+                onclick="showUsernameModal = true; render();"
+                class="flex items-center space-x-2 bg-gray-200 dark:bg-gray-800 rounded-full px-2 py-1 cursor-pointer hover:bg-gray-300 dark:hover:bg-gray-700 transition-colors group"
+              >
+                ${ICONS.user}
+                <span class="hidden md:block text-sm font-semibold text-gray-600 dark:text-gray-300 group-hover:text-orange-600 group-hover:dark:text-orange-400 transition-colors">${username}</span>
+                ${ICONS.edit}
+              </div>
+            </div>
+          </div>
+        </header>
+      `;
+
+      document.getElementById('theme-toggle-btn').onclick = toggleTheme;
+
+      // Render the main content based on quizState
+      let content = '';
+      const totalQuestions = 10;
+      const averageScore = adminAnalytics.totalPlays > 0 ? (adminAnalytics.totalScore / adminAnalytics.totalPlays).toFixed(1) : 0;
+      const finalPercentage = userScore ? ((userScore / totalQuestions) * 100).toFixed(0) : 0;
+      const twitterShareUrl = userScore
+        ? `https://twitter.com/intent/tweet?text=I scored ${userScore} out of ${questions.length} on the Perle quiz and earned the role of ${getRole(userScore).split(' ')[0]}! Can you beat my score? #PerleAIQuiz`
+        : '#';
+      
+      switch (quizState) {
+        case 'start':
+          content = `
+            <div class="flex flex-col items-center justify-center p-8 text-center rounded-xl">
+              <div class="bg-gradient-to-br from-orange-500 to-red-600 p-8 md:p-12 rounded-3xl shadow-2xl text-white max-w-3xl w-full">
+                  <div class="flex justify-center items-center mb-6">
+                      <img src="${perleLogo}" alt="Perle Logo" class="w-40 h-auto animate-fade-in" />
+                  </div>
+                  <h1 class="text-4xl md:text-6xl font-bold mb-4 animate-fade-in">
+                      Welcome to the Perle Quiz!
+                  </h1>
+                  <p class="text-lg md:text-xl font-medium mb-8 opacity-90 animate-fade-in-slow">
+                      Test your knowledge on the company, its mission, and its technology.
+                  </p>
+                  <div class="flex flex-col space-y-4">
+                    <a
+                      href="https://www.perle.ai/company"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="inline-flex items-center justify-center space-x-3 px-8 py-4 rounded-full font-extrabold text-lg bg-white bg-opacity-20 text-white shadow-md hover:bg-opacity-30 transition-all duration-300 transform hover:scale-105 active:scale-95 group"
+                    >
+                      ${ICONS.lightbulb}
+                      <span>Learn about Perle AI</span>
+                    </a>
+                    <button
+                      id="start-quiz-btn"
+                      class="bg-white text-orange-600 px-10 py-5 rounded-full text-xl font-extrabold shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105 active:scale-95 animate-pulse-light"
+                    >
+                      Take a Quiz
+                    </button>
+                  </div>
+              </div>
+
+              <div class="mt-12 w-full max-w-xl">
+                <h3 class="text-2xl font-bold text-gray-800 dark:text-gray-50 mb-4 text-center">Quiz Stats</h3>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                  <div class="bg-white dark:bg-gray-900 p-6 rounded-2xl shadow-md text-center">
+                    <p class="text-4xl font-extrabold text-orange-600">${adminAnalytics.totalPlays}</p>
+                    <p class="text-gray-500 dark:text-gray-400 font-medium mt-2">Total Plays</p>
+                  </div>
+                  <div class="bg-white dark:bg-gray-900 p-6 rounded-2xl shadow-md text-center">
+                    <p class="text-4xl font-extrabold text-orange-600">${averageScore}</p>
+                    <p class="text-gray-500 dark:text-gray-400 font-medium mt-2">Average Score</p>
+                  </div>
+                </div>
+                <p class="text-xs text-gray-400 mt-6 text-center break-all">User ID: <span class="font-mono">${userId || 'Loading...'}</span></p>
+              </div>
+            </div>
+          `;
+          break;
+
+        case 'playing':
+          const currentQuestion = questions[currentQuestionIndex];
+          const progressPercentage = (currentQuestionIndex / questions.length) * 100;
+          let optionsHtml = '';
+          if (currentQuestion && currentQuestion.options) {
+            optionsHtml = currentQuestion.options.map(option => {
+              const isCorrectAnswer = currentQuestion.answer === option;
+              const buttonClass = `
+                w-full text-left p-4 sm:p-6 rounded-2xl font-bold transition-all duration-300 border-4
+                ${showFeedback && selectedOption === option
+                  ? (isCorrect ? 'bg-green-100 dark:bg-green-900 border-green-500 dark:border-green-700 text-green-800 dark:text-green-200' : 'bg-red-100 dark:bg-red-900 border-red-500 dark:border-red-700 text-red-800 dark:text-red-200')
+                  : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-800 dark:text-gray-50 hover:bg-gray-100 dark:hover:bg-gray-700'
+                }
+                ${showFeedback ? 'cursor-not-allowed' : 'cursor-pointer'}
+                shadow-md hover:shadow-lg
+              `;
+              return `<button onclick="handleAnswer('${option}')" class="${buttonClass}" ${showFeedback ? 'disabled' : ''}>${option}</button>`;
+            }).join('');
+          }
+
+          content = `
+            <div class="w-full max-w-4xl flex flex-col items-center px-4 sm:px-6">
+              <div class="w-full flex items-center justify-between mb-8">
+                <div class="text-gray-600 dark:text-gray-400 font-semibold">
+                  Question ${currentQuestionIndex + 1} of ${questions.length}
+                </div>
+                <div class="flex items-center space-x-2 text-orange-600 dark:text-orange-400 font-bold text-lg bg-orange-100 dark:bg-orange-950 px-4 py-2 rounded-full shadow-inner">
+                  ${ICONS.zap}
+                  <span>Time Left:</span>
+                  <span class="w-8 text-center">${timeLeft}s</span>
+                </div>
+              </div>
+
+              <div class="w-full bg-gray-200 dark:bg-gray-800 rounded-full h-2.5 mb-8">
+                <div
+                  class="bg-orange-500 h-2.5 rounded-full transition-all duration-500 ease-in-out"
+                  style="width: ${progressPercentage}%"
+                ></div>
+              </div>
+
+              <div class="w-full bg-white dark:bg-gray-900 rounded-3xl shadow-xl p-6 sm:p-10 transition-all duration-300 transform hover:scale-105">
+                <h2 class="text-2xl md:text-3xl font-extrabold text-gray-800 dark:text-gray-50 mb-8 leading-tight">
+                  ${currentQuestion ? currentQuestion.question : 'Loading...'}
+                </h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
+                  ${optionsHtml}
+                </div>
+                ${showFeedback
+                  ? `<div class="mt-8 p-6 rounded-2xl font-semibold text-center transition-all duration-300 transform scale-100
+                    ${isCorrect ? 'bg-green-50 dark:bg-green-950 text-green-800 dark:text-green-100 border-2 border-green-200 dark:border-green-800' : 'bg-red-50 dark:bg-red-950 text-red-800 dark:text-red-100 border-2 border-red-200 dark:border-red-800'}'}">
+                    <span class="text-2xl font-extrabold block mb-2">${isCorrect ? 'Correct! 🎉' : 'Incorrect. 😕'}</span>
+                    <p class="font-normal text-gray-700 dark:text-gray-300">${currentQuestion.explanation}</p>
+                  </div>`
+                  : ''
+                }
+              </div>
+            </div>
+          `;
+          break;
+
+        case 'results':
+          const averageTimePerQuestion = totalTime ? (totalTime / totalQuestions).toFixed(1) : 0;
+          content = `
+            <div class="flex flex-col items-center justify-center p-8 text-center bg-white dark:bg-gray-900 rounded-3xl shadow-2xl relative overflow-hidden max-w-xl w-full">
+              <h2 class="text-4xl sm:text-5xl font-bold text-gray-800 dark:text-gray-50 mb-4">Quiz Complete!</h2>
+              <p class="text-gray-700 dark:text-gray-300 text-xl mb-2 font-medium">Your Score:</p>
+              <p class="text-6xl sm:text-8xl font-extrabold text-orange-600 mb-4 drop-shadow-lg animate-pulse">
+                ${userScore} / ${questions.length}
+              </p>
+              <p class="text-3xl font-bold text-gray-700 dark:text-gray-300 mb-8">${finalPercentage}%</p>
+              
+              <div class="w-full p-4 mb-8 bg-gray-100 dark:bg-gray-800 rounded-2xl shadow-inner">
+                  <h3 class="text-2xl font-bold text-gray-800 dark:text-gray-50 mb-4">Your Performance Breakdown</h3>
+                  <div class="grid grid-cols-2 gap-4">
+                      <div class="p-4 bg-white dark:bg-gray-900 rounded-xl shadow-md flex flex-col items-center">
+                          ${ICONS.clock}
+                          <p class="text-2xl font-extrabold text-gray-800 dark:text-gray-50">${averageTimePerQuestion}s</p>
+                          <p class="text-sm text-gray-500 dark:text-gray-400">Avg Time / Question</p>
+                      </div>
+                      <div class="p-4 bg-white dark:bg-gray-900 rounded-xl shadow-md flex flex-col items-center">
+                          ${ICONS.trendingUp}
+                          <p class="text-2xl font-extrabold text-gray-800 dark:text-gray-50">${finalPercentage}%</p>
+                          <p class="text-sm text-gray-500 dark:text-gray-400">Accuracy</p>
+                      </div>
+                  </div>
+              </div>
+
+              <p class="text-xl font-bold text-gray-700 dark:text-gray-300 mb-8">Your Role: <span class="text-orange-600">${getRole(userScore)}</span></p>
+
+              <div class="flex flex-col sm:flex-row gap-4 mt-4 z-10 w-full px-4">
+                <button
+                  onclick="setQuizState('start')"
+                  class="flex-1 px-6 py-4 text-lg font-bold text-white bg-orange-600 rounded-full shadow-lg hover:bg-orange-700 dark:bg-orange-500 dark:hover:bg-orange-600 transition-all transform hover:scale-105 active:scale-95"
+                >
+                  Retake Quiz
+                </button>
+                <a
+                  href="${twitterShareUrl}"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="flex-1 flex items-center justify-center px-6 py-4 text-lg font-bold text-white bg-black rounded-full shadow-lg hover:bg-gray-800 transition-all transform hover:scale-105 active:scale-95"
+                >
+                  ${ICONS.twitter} Share on X
+                </a>
+              </div>
+            </div>
+          `;
+          break;
+        
+        case 'leaderboard':
+          const leaderboardItems = leaderboardData.map((entry, index) => {
+            const isUser = entry.id === userId;
+            const rankClass = index === 0 ? 'bg-yellow-100 dark:bg-yellow-900 border-2 border-yellow-400' :
+              index === 1 ? 'bg-gray-100 dark:bg-gray-800 border-2 border-gray-400' :
+              index === 2 ? 'bg-amber-100 dark:bg-amber-900 border-2 border-amber-400' :
+              'bg-gray-50 dark:bg-gray-950';
+            const textClass = index < 3 ? 'text-gray-900 dark:text-gray-50' : 'text-gray-700 dark:text-gray-200';
+            return `
+              <div class="p-4 rounded-xl flex items-center justify-between shadow-md transition-all duration-300 transform hover:scale-105 ${rankClass}">
+                <div class="flex items-center space-x-4">
+                  <span class="text-xl font-bold ${textClass}">${index + 1}.</span>
+                  <div class="text-left">
+                    <p class="font-bold text-lg text-gray-900 dark:text-gray-50">
+                      ${entry.username || `Player-${entry.id.substring(0, 4)}`}
+                      ${isUser ? `<span class="font-normal text-sm text-gray-500 dark:text-gray-400 ml-2">(You)</span>` : ''}
+                    </p>
+                    <p class="text-sm text-gray-500 dark:text-gray-400 break-all">${entry.userId}</p>
+                  </div>
+                </div>
+                <div class="text-2xl font-extrabold text-orange-600">${entry.score}</div>
+              </div>
+            `;
+          }).join('');
+
+          content = `
+            <div class="w-full max-w-2xl p-8 bg-white dark:bg-gray-900 rounded-3xl shadow-2xl flex flex-col items-center text-center">
+              <h2 class="text-4xl font-extrabold mb-6 text-gray-800 dark:text-gray-50">Leaderboard</h2>
+              <p class="text-gray-600 dark:text-gray-400 mb-8">Top players who have proven their knowledge on Perle.</p>
+              <div class="w-full space-y-4">
+                ${leaderboardData.length > 0 ? leaderboardItems : `<p class="text-gray-500 dark:text-gray-400 italic">No one has played yet. Be the first!</p>`}
+              </div>
+            </div>
+          `;
+          break;
+          
+        case 'feedback':
+          content = `
+            <div class="w-full max-w-xl p-8 bg-white dark:bg-gray-900 rounded-2xl shadow-xl flex flex-col items-center text-center">
+              <h2 class="text-2xl font-bold mb-4 text-gray-800 dark:text-gray-50">We Value Your Feedback!</h2>
+              <p class="text-gray-600 dark:text-gray-400 mb-6">Let us know what you think of the quiz or suggest improvements.</p>
+              <form id="feedback-form" class="w-full">
+                <textarea
+                  id="feedback-text-area"
+                  class="w-full p-4 border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 rounded-lg focus:outline-none focus:ring-2 focus:ring-orange-500 mb-4 text-gray-700 dark:text-gray-50"
+                  rows="5"
+                  placeholder="Type your feedback here..."
+                ></textarea>
+                <button
+                  type="submit"
+                  id="feedback-submit-btn"
+                  class="w-full py-3 px-6 rounded-full font-semibold text-white transition-colors bg-orange-600 hover:bg-orange-700 dark:bg-orange-500 dark:hover:bg-orange-600 active:scale-95"
+                >
+                  Submit Feedback
+                </button>
+              </form>
+            </div>
+          `;
+          break;
+      }
+      appContainer.innerHTML = content;
+      
+      // Event listeners for dynamic content
+      if (quizState === 'start') {
+        document.getElementById('start-quiz-btn').onclick = startQuiz;
+      } else if (quizState === 'feedback') {
+        const feedbackForm = document.getElementById('feedback-form');
+        feedbackForm.onsubmit = handleSubmitFeedback;
+      }
+
+      // Render modal if active
+      modalContainer.innerHTML = '';
+      if (showUsernameModal) {
+        modalContainer.innerHTML = `
+          <div class="fixed inset-0 bg-gray-950 bg-opacity-75 flex items-center justify-center z-50 p-4 transition-opacity duration-300">
+            <div class="bg-white dark:bg-gray-900 rounded-3xl shadow-2xl p-8 max-w-sm w-full relative transform scale-100 transition-transform duration-300">
+              <button
+                onclick="showUsernameModal = false; render();"
+                class="absolute top-4 right-4 p-2 rounded-full text-gray-500 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+              >
+                ${ICONS.x}
+              </button>
+              <h2 class="text-2xl font-bold mb-4 text-gray-800 dark:text-gray-50">Change Username</h2>
+              <p class="text-sm text-gray-600 dark:text-gray-400 mb-6">Choose a name that will appear on the leaderboard.</p>
+              <input
+                type="text"
+                value="${username}"
+                id="username-input"
+                placeholder="Enter a username..."
+                class="w-full p-3 rounded-xl border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 text-gray-900 dark:text-gray-50 focus:outline-none focus:ring-2 focus:ring-orange-500 mb-4"
+              />
+              <button
+                onclick="saveUsername();"
+                class="w-full py-3 px-6 rounded-full font-semibold text-white bg-orange-600 hover:bg-orange-700 dark:bg-orange-500 dark:hover:bg-orange-600 transition-all active:scale-95"
+              >
+                Save Username
+              </button>
+            </div>
+          </div>
+        `;
+        document.getElementById('username-input').oninput = (e) => {
+          username = e.target.value;
+        };
+      }
+    };
+    
+    // Function to handle the start of the quiz
+    const startQuiz = () => {
+      questions = shuffleArray(allQuestions).slice(0, 10);
+      quizState = 'playing';
+      currentQuestionIndex = 0;
+      score = 0;
+      timeLeft = 15;
+      showFeedback = false;
+      selectedOption = null;
+      isCorrect = null;
+      showConfetti = false;
+      totalTime = 0;
+      startTimer();
+      render();
+    };
+
+    // Function to handle the user's answer
+    const handleAnswer = (option) => {
+      const currentQuestion = questions[currentQuestionIndex];
+      isCorrect = currentQuestion.answer === option;
+      selectedOption = option;
+      showFeedback = true;
+      clearInterval(timerInterval);
+      
+      const timeTaken = 15 - timeLeft;
+      totalTime += timeTaken;
+
+      if (isCorrect) {
+        score++;
+      }
+      
+      render();
+
+      setTimeout(() => {
+        if (currentQuestionIndex < questions.length - 1) {
+          currentQuestionIndex++;
+          timeLeft = 15;
+          showFeedback = false;
+          selectedOption = null;
+          isCorrect = null;
+          startTimer();
+          render();
+        } else {
+          quizState = 'results';
+          userScore = score;
+          showConfetti = true;
+          saveUserScore(userScore);
+          render();
+        }
+      }, 2000);
+    };
+
+    // Timer logic
+    const startTimer = () => {
+      clearInterval(timerInterval);
+      timerInterval = setInterval(() => {
+        timeLeft--;
+        if (timeLeft <= 0) {
+          clearInterval(timerInterval);
+          handleAnswer(null); // Timeout is an incorrect answer
+        }
+        render();
+      }, 1000);
+    };
+
+    // Save the user's score to Firestore and update leaderboard
+    const saveUserScore = async (finalScore) => {
+      if (!db || !userId) {
+        console.error("Firestore not initialized or user not authenticated.");
+        return;
+      }
+      try {
+        const statsRef = doc(db, 'artifacts', appId, 'public', 'data', 'quiz_stats', 'global_stats');
+        const userStatsRef = doc(db, 'artifacts', appId, 'users', userId, 'quiz_results', 'latest');
+        const userLeaderboardRef = doc(db, 'artifacts', appId, 'public', 'data', 'leaderboard', userId);
+        const userProfileRef = doc(db, 'artifacts', appId, 'users', userId, 'profile', 'data');
+        
+        await updateDoc(statsRef, {
+          totalPlays: increment(1),
+          totalScore: increment(finalScore),
+        });
+
+        await setDoc(userStatsRef, {
+          score: finalScore,
+          totalTime: totalTime,
+          accuracy: (finalScore / questions.length) * 100,
+          timestamp: new Date(),
+        }, { merge: true });
+
+        const userProfileSnap = await getDoc(userProfileRef);
+        const currentUsername = userProfileSnap.exists() ? userProfileSnap.data().username : `Player-${userId.substring(0,4)}`;
+
+        const leaderboardDoc = await getDoc(userLeaderboardRef);
+        if (!leaderboardDoc.exists() || leaderboardDoc.data().score < finalScore) {
+          await setDoc(userLeaderboardRef, {
+            userId: userId, 
+            username: currentUsername,
+            score: finalScore,
+            timestamp: new Date(),
+          });
+        }
+      } catch (error) {
+        console.error("Error saving user score:", error);
+      }
+    };
+    
+    // Save username function
+    const saveUsername = async () => {
+      const newUsername = document.getElementById('username-input').value;
+      if (!db || !userId) {
+        console.error("Firestore not initialized or user not authenticated. Cannot save username.");
+        return;
+      }
+      const userProfileRef = doc(db, 'artifacts', appId, 'users', userId, 'profile', 'data');
+      try {
+        await setDoc(userProfileRef, { username: newUsername.trim() || 'Anonymous' }, { merge: true });
+        username = newUsername.trim() || 'Anonymous';
+        showUsernameModal = false;
+        render();
+      } catch (error) {
+        console.error("Error saving username:", error);
+      }
+    };
+
+    // Handle feedback submission
+    const handleSubmitFeedback = async (e) => {
+      e.preventDefault();
+      const feedbackText = document.getElementById('feedback-text-area').value;
+      if (!feedbackText.trim()) return;
+
+      if (!db || !userId) {
+        console.error("Firestore not initialized or user not authenticated. Cannot submit feedback.");
+        return;
+      }
+
+      const feedbackCollectionRef = collection(db, 'artifacts', appId, 'public', 'data', 'feedback');
+      try {
+        await addDoc(feedbackCollectionRef, {
+          feedback: feedbackText,
+          userId,
+          timestamp: new Date(),
+        });
+        const submitBtn = document.getElementById('feedback-submit-btn');
+        submitBtn.disabled = true;
+        submitBtn.textContent = 'Feedback Submitted! Thank you.';
+        submitBtn.className = 'w-full py-3 px-6 rounded-full font-semibold text-white transition-colors bg-green-500 cursor-not-allowed';
+        setTimeout(() => {
+          setQuizState('start');
+        }, 3000);
+      } catch (error) {
+        console.error("Error submitting feedback:", error);
+      }
+    };
+
+    // Toggle between light and dark mode
+    const toggleTheme = () => {
+      theme = theme === 'light' ? 'dark' : 'light';
+      render();
+    };
+
+    // Update the main state and re-render
+    const setQuizState = (newState) => {
+      quizState = newState;
+      render();
+    };
+
+    // Main initialization function
+    window.onload = async () => {
+      try {
+        app = initializeApp(firebaseConfig);
+        db = getFirestore(app);
+        auth = getAuth(app);
+        
+        if (initialAuthToken) {
+          await signInWithCustomToken(auth, initialAuthToken);
+        } else {
+          await signInAnonymously(auth);
+        }
+
+        onAuthStateChanged(auth, async (user) => {
+          if (user) {
+            userId = user.uid;
+            const userProfileRef = doc(db, 'artifacts', appId, 'users', userId, 'profile', 'data');
+            const docSnap = await getDoc(userProfileRef);
+            if (docSnap.exists() && docSnap.data().username) {
+              username = docSnap.data().username;
+            } else {
+              username = `Player-${userId.substring(0, 4)}`;
+              await setDoc(userProfileRef, { username }, { merge: true });
+            }
+          } else {
+            userId = null;
+            username = 'Anonymous';
+          }
+          isAuthReady = true;
+          render();
+        });
+        
+        // Setup Firestore listeners
+        const statsRef = doc(db, 'artifacts', appId, 'public', 'data', 'quiz_stats', 'global_stats');
+        unsubscribeAnalytics = onSnapshot(statsRef, (docSnap) => {
+          if (docSnap.exists()) {
+            adminAnalytics = {
+              totalPlays: docSnap.data().totalPlays || 0,
+              totalScore: docSnap.data().totalScore || 0,
+            };
+          } else {
+            adminAnalytics = { totalPlays: 0, totalScore: 0 };
+            setDoc(statsRef, { totalPlays: 0, totalScore: 0 }).catch(e => console.error("Error initializing global stats:", e));
+          }
+          render();
+        });
+
+        const leaderboardCollectionRef = collection(db, 'artifacts', appId, 'public', 'data', 'leaderboard');
+        unsubscribeLeaderboard = onSnapshot(leaderboardCollectionRef, (querySnapshot) => {
+          const scores = [];
+          querySnapshot.forEach((doc) => {
+            scores.push({ id: doc.id, ...doc.data() });
+          });
+          // Sort scores in-memory
+          scores.sort((a, b) => b.score - a.score);
+          leaderboardData = scores;
+          render();
+        });
+      } catch (error) {
+        console.error("Firebase initialization failed:", error);
+        // Fallback to anonymous user experience if Firebase fails
+        isAuthReady = true;
+        render();
+      }
+    };
+  </script>
+
+  <!-- Custom CSS for animations -->
+  <style>
+    @keyframes fade-in {
+      from { opacity: 0; transform: translateY(-20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes fade-in-slow {
+      from { opacity: 0; transform: translateY(-10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes pulse-light {
+      0%, 100% {
+        transform: scale(1);
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+      }
+      50% {
+        transform: scale(1.05);
+        box-shadow: 0 20px 25px -5px rgba(255, 126, 0, 0.3), 0 10px 10px -5px rgba(255, 126, 0, 0.2);
+      }
+    }
+    @keyframes bounce-slow {
+      0%, 100% { transform: translateY(-15%); animation-timing-function: cubic-bezier(0.8,0,1,1); }
+      50% { transform: translateY(0); animation-timing-function: cubic-bezier(0,0,0.2,1); }
+    }
+    .animate-fade-in { animation: fade-in 0.8s ease-out; }
+    .animate-fade-in-slow { animation: fade-in-slow 1.2s ease-out; }
+    .animate-pulse-light { animation: pulse-light 2s infinite cubic-bezier(0.4, 0, 0.6, 1); }
+    .animate-bounce-slow { animation: bounce-slow 2s infinite; }
+    @keyframes float {
+      0% { transform: translateY(0) rotate(0deg); }
+      50% { transform: translateY(-20px) rotate(5deg); }
+      100% { transform: translateY(0) rotate(0deg); }
+    }
+    .animate-float {
+      animation: float 8s ease-in-out infinite;
+    }
+  </style>
+</head>
+<body>
+  <!-- The main app container where all content will be rendered by JS -->
+  <div id="app" class="min-h-screen flex flex-col font-sans relative overflow-hidden">
+    <!-- Animated Background Logo -->
+    <div class="absolute top-1/4 left-1/2 -translate-x-1/2 -translate-y-1/2 z-0 opacity-10 dark:opacity-20 pointer-events-none">
+      <img src="${perleLogo}" alt="Perle Background Logo" class="w-[400px] h-auto animate-float" />
+    </div>
+
+    <!-- Container for the modal -->
+    <div id="modal-container"></div>
+    
+    <!-- Header content will be dynamically rendered here -->
+    <div id="header-container"></div>
+
+    <!-- Main content area -->
+    <main class="flex-1 flex items-center justify-center py-12 px-4 md:px-8 z-10" id="app-container"></main>
+
+    <!-- Footer -->
+    <footer class="w-full bg-white dark:bg-gray-900 shadow-inner mt-auto z-10">
+      <div class="container mx-auto px-4 py-8 flex flex-col md:flex-row justify-between items-center text-center md:text-left space-y-4 md:space-y-0">
+        <div class="text-gray-500 dark:text-gray-400 text-sm">
+          &copy; ${new Date().getFullYear()} Perle Quiz. All rights reserved.
+        </div>
+        <div class="flex items-center justify-center space-x-6">
+          <a href="#" class="text-gray-500 dark:text-gray-400 hover:text-orange-600 transition-colors">About</a>
+          <a href="#" class="text-gray-500 dark:text-gray-400 hover:text-orange-600 transition-colors">Contact</a>
+          <a href="#" class="text-gray-500 dark:text-gray-400 hover:text-orange-600 transition-colors">Privacy Policy</a>
+        </div>
+        <div class="flex items-center justify-center space-x-4">
+          <a href="https://twitter.com" target="_blank" rel="noopener noreferrer" class="text-gray-500 dark:text-gray-400 hover:text-orange-600 transition-colors">
+            ${ICONS.twitter}
+          </a>
+          <a href="https://github.com" target="_blank" rel="noopener noreferrer" class="text-gray-500 dark:text-gray-400 hover:text-orange-600 transition-colors">
+            ${ICONS.github}
+          </a>
+        </div>
+      </div>
+    </footer>
+  </div>
+</body>
+</html>
